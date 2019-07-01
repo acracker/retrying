@@ -17,6 +17,7 @@ import six
 import sys
 import time
 import traceback
+from types import AsyncGeneratorType
 
 
 # sys.maxint / 2, since Python 3.2 doesn't have a sys.maxint...
@@ -38,10 +39,14 @@ def retry(*dargs, **dkw):
     # support both @retry and @retry() as valid syntax
     if len(dargs) == 1 and callable(dargs[0]):
         def wrap_simple(f):
-
-            @six.wraps(f)
-            def wrapped_f(*args, **kw):
-                return Retrying().call(f, *args, **kw)
+            if isinstance(f, AsyncGeneratorType):
+                @six.wraps(f)
+                async def wrapped_f(*args, **kw):
+                    return await Retrying().async_call(f, *args, **kw)
+            else:
+                @six.wraps(f)
+                def wrapped_f(*args, **kw):
+                    return Retrying().call(f, *args, **kw)
 
             return wrapped_f
 
@@ -49,10 +54,14 @@ def retry(*dargs, **dkw):
 
     else:
         def wrap(f):
-
-            @six.wraps(f)
-            def wrapped_f(*args, **kw):
-                return Retrying(*dargs, **dkw).call(f, *args, **kw)
+            if isinstance(f, AsyncGeneratorType):
+                @six.wraps(f)
+                async def wrapped_f(*args, **kw):
+                    return await Retrying(*dargs, **dkw).async_call(f, *args, **kw)
+            else:
+                @six.wraps(f)
+                def wrapped_f(*args, **kw):
+                    return Retrying(*dargs, **dkw).call(f, *args, **kw)
 
             return wrapped_f
 
@@ -249,6 +258,43 @@ class Retrying(object):
 
             attempt_number += 1
 
+    async def async_call(self, fn, *args, **kwargs):
+        start_time = int(round(time.time() * 1000))
+        attempt_number = 1
+        while True:
+            if self._before_attempts:
+                self._before_attempts(attempt_number)
+
+            try:
+                resp = fn(*args, **kwargs)
+                if isinstance(fn, AsyncGeneratorType):
+                    resp = await resp
+                attempt = Attempt(resp, attempt_number, False)
+            except:
+                tb = sys.exc_info()
+                attempt = Attempt(tb, attempt_number, True)
+
+            if not self.should_reject(attempt):
+                return attempt.get(self._wrap_exception)
+
+            if self._after_attempts:
+                self._after_attempts(attempt_number)
+
+            delay_since_first_attempt_ms = int(round(time.time() * 1000)) - start_time
+            if self.stop(attempt_number, delay_since_first_attempt_ms):
+                if not self._wrap_exception and attempt.has_exception:
+                    # get() on an attempt with an exception should cause it to be raised, but raise just in case
+                    raise attempt.get()
+                else:
+                    raise RetryError(attempt)
+            else:
+                sleep = self.wait(attempt_number, delay_since_first_attempt_ms)
+                if self._wait_jitter_max:
+                    jitter = random.random() * self._wait_jitter_max
+                    sleep = sleep + max(0, jitter)
+                time.sleep(sleep / 1000.0)
+
+            attempt_number += 1
 
 class Attempt(object):
     """
