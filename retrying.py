@@ -17,7 +17,7 @@ import six
 import sys
 import time
 import traceback
-from types import AsyncGeneratorType
+import inspect
 
 
 # sys.maxint / 2, since Python 3.2 doesn't have a sys.maxint...
@@ -39,7 +39,7 @@ def retry(*dargs, **dkw):
     # support both @retry and @retry() as valid syntax
     if len(dargs) == 1 and callable(dargs[0]):
         def wrap_simple(f):
-            if isinstance(f, AsyncGeneratorType):
+            if inspect.iscoroutinefunction(f):
                 @six.wraps(f)
                 async def wrapped_f(*args, **kw):
                     return await Retrying().async_call(f, *args, **kw)
@@ -54,7 +54,7 @@ def retry(*dargs, **dkw):
 
     else:
         def wrap(f):
-            if isinstance(f, AsyncGeneratorType):
+            if inspect.iscoroutinefunction(f):
                 @six.wraps(f)
                 async def wrapped_f(*args, **kw):
                     return await Retrying(*dargs, **dkw).async_call(f, *args, **kw)
@@ -267,7 +267,7 @@ class Retrying(object):
 
             try:
                 resp = fn(*args, **kwargs)
-                if isinstance(fn, AsyncGeneratorType):
+                if inspect.iscoroutinefunction(fn):
                     resp = await resp
                 attempt = Attempt(resp, attempt_number, False)
             except:
